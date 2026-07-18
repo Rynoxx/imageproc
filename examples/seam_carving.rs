@@ -47,7 +47,7 @@ cargo run --release --example seam_carving tests/data/elephant.png ./output 25
         .unwrap_or_else(|_| panic!("Could not load image at {:?}", input_path))
         .into_rgba8();
 
-    // If all you need to do is shrink, without caring about the seams themselves, use shrink and shrink_width directly.
+    // If all you need to do is shrink, without caring about the seams themselves, use shrink_width directly.
     if only_shrink {
         let target_width = input.width() - (seams_to_remove as u32);
         let shrunk = shrink_width(&input, target_width);
@@ -67,14 +67,9 @@ cargo run --release --example seam_carving tests/data/elephant.png ./output 25
         println!("Lowest seam energy: {lowest_energy}");
 
         // Draw annotated original showing all lowest-energy seams
-        let selected_seams = vertical_seams.to_vec_lowest(seams_to_remove);
-        let annotated = draw_vertical_seams(&input, &selected_seams, false);
         let annotated_by_energy =
             draw_vertical_seams_by_energy(&input, &vertical_seams, seams_to_remove);
 
-        annotated
-            .save(&output_dir.join("annotated_seams.png"))
-            .unwrap();
         annotated_by_energy
             .save(&output_dir.join("annotated_seams_by_energy.png"))
             .unwrap();

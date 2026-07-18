@@ -54,7 +54,7 @@
 
 use crate::{definitions::Image, map::map_pixels};
 
-use image::{GenericImageView, ImageBuffer, Luma, Pixel, Primitive, Rgba};
+use image::{GenericImageView, GrayImage, ImageBuffer, Luma, Pixel, Primitive, Rgb, Rgba};
 
 /// An image seam connecting the bottom of an image to its top (in that order).
 #[derive(Debug, Clone)]
@@ -105,61 +105,37 @@ where
     out
 }
 
-/// Draws a series of `seams` on `image` in red.
+/// Draws a series of `seams` on `image` in red. Assumes that the provided seams were
+/// removed in the given order from the input image.
 ///
-/// if `removed_individually` is true then it assumes that the provided seams were
-/// removed one by one in the given order from the input `image`.
-///
-/// if `removed_individually` is false then the seam coordinates must refer to
-/// the original `image` coordinate space, as returned by
-/// [`VerticalSeams::to_vec`] or [`VerticalSeams::to_vec_lowest`].
-pub fn draw_vertical_seams<P>(
-    image: &Image<P>,
-    seams: &[VerticalSeam],
-    removed_individually: bool,
-) -> Image<Rgba<u8>>
-where
-    P: Pixel<Subpixel = u8>,
-{
-    let (width, height) = image.dimensions();
+/// Incompatible with VerticalSeam array returned by
+/// [`VerticalSeams::to_vec`] or [`VerticalSeams::to_vec_lowest`] as they are in
+/// the origninal coordinate space of the image.
+/// In which case [`draw_vertical_seams_by_energy`] should be used instead.
+pub fn draw_vertical_seams(image: &GrayImage, seams: &[VerticalSeam]) -> Image<Rgb<u8>> {
+    let height = image.height();
 
-    let mut out = map_pixels(image, |p| p.to_rgba());
+    let mut out = map_pixels(image, |p| p.to_rgb());
+    let mut offsets = vec![vec![]; height as usize];
 
-    if removed_individually {
-        let mut offsets = vec![vec![]; height as usize];
+    for seam in seams {
+        assert_eq!(
+            seam.0.len() as u32,
+            height,
+            "seam length does not match image height"
+        );
 
-        for seam in seams {
-            assert_eq!(
-                seam.0.len() as u32,
-                height,
-                "seam length does not match image height"
-            );
+        for (y, x) in (0..height).rev().zip(&seam.0) {
+            let mut x_original = *x;
 
-            for (y, x) in (0..height).rev().zip(&seam.0) {
-                let mut x_original = *x;
-
-                for o in &offsets[y as usize] {
-                    if *o < *x {
-                        x_original += 1;
-                    }
+            for o in &offsets[y as usize] {
+                if *o < *x {
+                    x_original += 1;
                 }
-
-                out.put_pixel(x_original, y, Rgba([255, 0, 0, 255]));
-                offsets[y as usize].push(x_original);
             }
-        }
-    } else {
-        for seam in seams {
-            assert_eq!(
-                seam.0.len() as u32,
-                height,
-                "seam length does not match image height"
-            );
 
-            for (y, x) in (0..height).rev().zip(&seam.0) {
-                assert!(*x < width, "seam x-position is outside image bounds");
-                out.put_pixel(*x, y, Rgba([255, 0, 0, 255]));
-            }
+            out.put_pixel(x_original, y, Rgb([255, 0, 0]));
+            offsets[y as usize].push(x_original);
         }
     }
 
@@ -1532,24 +1508,6 @@ mod tests {
         assert_eq!(result.height(), height);
     }
 
-    #[test]
-    fn draw_lowest_seams_uses_original_coordinates() {
-        let width = 8u32;
-        let height = 6u32;
-        let pixels: Vec<u8> = (0u8..=254)
-            .cycle()
-            .take((width * height * 3) as usize)
-            .collect();
-
-        let img = RgbImage::from_vec(width, height, pixels).unwrap();
-        let vertical_seams = find_vertical_seams(&img);
-        let selected_seams = vertical_seams.to_vec_lowest(4);
-        let annotated = draw_vertical_seams(&img, &selected_seams, false);
-
-        assert_eq!(annotated.width(), width);
-        assert_eq!(annotated.height(), height);
-    }
-
     // -------------------------------------------------------------------------
     // draw_vertical_seams
     // -------------------------------------------------------------------------
@@ -1567,18 +1525,9 @@ mod tests {
         // to original x=2 in every row.
         let individually_removed = vec![VerticalSeam(vec![0, 0, 0]), VerticalSeam(vec![1, 1, 1])];
 
-        // Equivalent seams expressed directly in the original image coordinate space.
-        let original_coordinates = vec![VerticalSeam(vec![0, 0, 0]), VerticalSeam(vec![2, 2, 2])];
+        let drawn_individually = draw_vertical_seams(&img, &individually_removed);
 
-        let drawn_individually = draw_vertical_seams(&img, &individually_removed, true);
-        let drawn_original = draw_vertical_seams(&img, &original_coordinates, false);
-
-        assert_eq!(
-            drawn_individually, drawn_original,
-            "drawing individually-removed seams should match drawing the same seams in original coordinates"
-        );
-
-        let red = Rgba([255, 0, 0, 255]);
+        let red = Rgb([255, 0, 0]);
 
         for y in 0..3 {
             assert_eq!(*drawn_individually.get_pixel(0, y), red);
@@ -1590,11 +1539,11 @@ mod tests {
 
             assert_eq!(
                 *drawn_individually.get_pixel(1, y),
-                Rgba([expected_col_1, expected_col_1, expected_col_1, 255])
+                Rgb([expected_col_1, expected_col_1, expected_col_1])
             );
             assert_eq!(
                 *drawn_individually.get_pixel(3, y),
-                Rgba([expected_col_3, expected_col_3, expected_col_3, 255])
+                Rgb([expected_col_3, expected_col_3, expected_col_3])
             );
         }
     }
@@ -1815,7 +1764,7 @@ mod tests {
         let img = GrayImage::from_vec(4, 3, vec![128u8; 12]).expect("valid image");
         // Build a seam with the wrong length (2 instead of 3)
         let bad_seam = VerticalSeam(vec![0, 1]);
-        draw_vertical_seams(&img, &[bad_seam], false);
+        draw_vertical_seams(&img, &[bad_seam]);
     }
 
     // -------------------------------------------------------------------------
